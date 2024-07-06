@@ -1,0 +1,1 @@
+### This is an implementation of the GPT2 124M model in PyTorch.
