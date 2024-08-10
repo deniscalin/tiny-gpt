@@ -5,6 +5,43 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 
+#--------------------------------------------------------
+import tiktoken
+
+
+class DataLoader:
+
+    def __init__(self, B, T):
+        self.B = B
+        self.T = T
+
+        # Load tokens from disc at object init
+        # Encode 
+        with open('input.txt', 'r') as f:
+            text = f.read()
+        enc = tiktoken.get_encoding('gpt2')
+        tokens = enc.encode(text)
+        self.tokens = torch.tensor(tokens)
+        print(f"Loaded {len(tokens)} tokens")
+        print(f"1 epoch = {len(tokens) // B * T} batches")
+
+        # Keeping state
+        self.current_position = 0
+
+
+    def next_batch(self):
+        B, T = self.B, self.T
+        buf = self.tokens[self.current_position : self.current_position + B * T + 1]
+        x = (buf[:-1].view(B, T))
+        y = (buf[1:].view(B, T))
+        self.current_position += B * T
+        # If current_position would be out of bounds on next call, reset to 0
+        if (self.current_position + B * T + 1) > len(self.tokens):
+            self.current_position = 0
+        return x, y
+#--------------------------------------------------------
+
+
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -94,7 +131,8 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embed, config.vocab_size, bias=False)
 
     
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
+        # idx shape (B, T)
         B, T = idx.size()
         assert T <= self.config.block_size
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
@@ -105,7 +143,10 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x) # shape (B, T, vocab_size)
-        return logits
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
     
     @classmethod
@@ -156,21 +197,58 @@ class GPT(nn.Module):
         return model
 
 #--------------------------------------------------------------
-num_return_sequences = 5
-max_length = 30
+device = 'cpu'
+if torch.cuda.is_available():
+    device = 'cuda'
+elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+    device = 'mps'
+print(f"Using device: {device}")
 
-model = GPT.from_pretrained('gpt2')
+# Get a data batch
+import tiktoken
+enc = tiktoken.get_encoding('gpt2')
+with open('input.txt', 'r') as f:
+    text = f.read()
+data = text[:1000]
+tokens = enc.encode(data)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B * T + 1], device=device)
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
+
+# Different model inits
 # from transformers import GPT2LMHeadModel
 # model = GPT2LMHeadModel.from_pretrained('gpt2')
+# model = GPT.from_pretrained('gpt2')
+
+# Init a fresh model
+model = GPT(GPTConfig())
 model.eval()
-model.to('mps')
+model.to(device)
+
+# Optimize
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+
+for i in range(50):
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"For step {i}, loss: {loss.item()}")
+
+print(loss)
+import sys; sys.exit(0)
+
+#--------------------------------------------------------------
+num_return_sequences = 5
+max_length = 30
 
 import tiktoken
 enc = tiktoken.get_encoding("gpt2")
 tokens = enc.encode("Latest breakthrough in quantum physics:")
 tokens = torch.tensor(tokens, dtype=torch.long) # shape (8)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x = tokens.to('mps')
+x = tokens.to(device)
 
 # Generating. Shape of x is (B, T) = (5, 8)
 torch.manual_seed(42)
