@@ -22,14 +22,14 @@ class CausalSelfAttention(nn.Module):
         
 
     def forward(self, x):
-        B, T, C = x.shape()
+        B, T, C = x.size()
         qkv = self.c_attn(x)
         q, k, v = qkv.split(self.n_embed, dim=2)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         att = (q @ k.transpose(-1, -2)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, :T, :T], float('-inf'))
+        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         y = att @ v # (B, nh, T, T) @ (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
@@ -94,6 +94,20 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embed, config.vocab_size, bias=False)
 
     
+    def forward(self, idx):
+        B, T = idx.size()
+        assert T <= self.config.block_size
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
+        pos_emb = self.transformer.wpe(pos) # shape (T, n_embed)
+        tok_emb = self.transformer.wte(idx) # shape (B, T, n_embed)
+        x = tok_emb + pos_emb
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x) # shape (B, T, vocab_size)
+        return logits
+
+    
     @classmethod
     def from_pretrained(cls, model_type):
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
@@ -142,8 +156,42 @@ class GPT(nn.Module):
         return model
 
 #--------------------------------------------------------------
+num_return_sequences = 5
+max_length = 30
+
 model = GPT.from_pretrained('gpt2')
-print("Didn't crash! Nice!!")
+# from transformers import GPT2LMHeadModel
+# model = GPT2LMHeadModel.from_pretrained('gpt2')
+model.eval()
+model.to('mps')
+
+import tiktoken
+enc = tiktoken.get_encoding("gpt2")
+tokens = enc.encode("Latest breakthrough in quantum physics:")
+tokens = torch.tensor(tokens, dtype=torch.long) # shape (8)
+tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+x = tokens.to('mps')
+
+# Generating. Shape of x is (B, T) = (5, 8)
+torch.manual_seed(42)
+torch.mps.manual_seed(42)
+while x.size(1) < max_length:
+    with torch.no_grad():
+        logits = model(x)
+        logits = logits[:, -1, :]
+        # Converting logits to probs
+        probs = F.softmax(logits, dim=-1)
+        # Gettting the top 50 probs and top 50 indices, both shape (5, 50)
+        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+        # Selecting one index from the top 50, shape (5, 1)
+        ix = torch.multinomial(topk_probs, 1)
+        # Get the corresponding indices that were selected
+        xcol = torch.gather(topk_indices, -1, ix)
+        # Append the new indices to the input along dim=1
+        x = torch.cat((x, xcol), 1)
 
 
-
+for i in range(num_return_sequences):
+    tokens = x[i, :max_length].tolist()
+    decoded = enc.decode(tokens)
+    print(">", decoded)
