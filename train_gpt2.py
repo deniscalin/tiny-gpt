@@ -23,7 +23,7 @@ class DataLoader:
         tokens = enc.encode(text)
         self.tokens = torch.tensor(tokens)
         print(f"Loaded {len(tokens)} tokens")
-        print(f"1 epoch = {len(tokens) // B * T} batches")
+        print(f"1 epoch = {len(tokens) // (B * T)} batches")
 
         # Keeping state
         self.current_position = 0
@@ -130,6 +130,9 @@ class GPT(nn.Module):
 
         self.lm_head = nn.Linear(config.n_embed, config.vocab_size, bias=False)
 
+        # Tying weights of LM Head and WTE, weight sharing
+        self.transformer.wte.weight = self.lm_head.weight
+
     
     def forward(self, idx, targets=None):
         # idx shape (B, T)
@@ -226,17 +229,48 @@ model = GPT(GPTConfig())
 model.eval()
 model.to(device)
 
-# Optimize
+# Optimizer and data loader
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+data_loader = DataLoader(B=4, T=32)
 
-for i in range(50):
+for i in range(2640):
+    x, y = data_loader.next_batch()
+    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
     logits, loss = model(x, y)
     loss.backward()
     optimizer.step()
     print(f"For step {i}, loss: {loss.item()}")
 
-print(loss)
+
+# Inspecting the accuracy
+#
+# logits = logits[:, -1, :]
+# probs = F.softmax(logits, dim=-1)
+# print("x", x)
+# print("y", y)
+# print("Probs", probs)
+# # Gettting the top 50 probs and top 50 indices, both shape (5, 50)
+# topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+# print("Topk probs", topk_probs)
+# print("Topk indices", topk_indices)
+# # # Selecting one index from the top 50, shape (5, 1)
+# ix = torch.multinomial(topk_probs, 1)
+# print("Selected idx for each pos", ix)
+# # # Get the corresponding indices that were selected
+# xcol = torch.gather(topk_indices, -1, ix)
+# print("Idx col to append", xcol)
+# # # Append the new indices to the input along dim=1
+# # x = torch.cat((x, xcol), 1)
+
+# num_return_sequences = 5
+# max_length = 30
+
+# for i in range(num_return_sequences):
+#     tokens = x[i, :max_length].tolist()
+#     decoded = enc.decode(tokens)
+#     print(">", decoded)
+
 import sys; sys.exit(0)
 
 #--------------------------------------------------------------
