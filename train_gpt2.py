@@ -52,6 +52,7 @@ class CausalSelfAttention(nn.Module):
         # Here we are doing it in one batch
         self.c_attn = nn.Linear(config.n_embed, 3 * config.n_embed)
         self.c_proj = nn.Linear(config.n_embed, config.n_embed)
+        self.c_proj.NANOGPT_SCALE_INIT = 1 # A flag to scale the residual layer init to 1/sqrt(n)
         self.n_embed = config.n_embed
         self.n_head = config.n_head
         self.register_buffer('bias', torch.tril(torch.ones(config.block_size, config.block_size))
@@ -81,6 +82,7 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embed, 4 * config.n_embed)
         self.gelu = nn.GELU(approximate='tanh')
         self.c_proj = nn.Linear(4 * config.n_embed, config.n_embed)
+        self.c_proj.NANOGPT_SCALE_INIT = 1 # A flag to scale the residual layer init to 1/sqrt(n)
 
 
     def forward(self, x):
@@ -139,7 +141,10 @@ class GPT(nn.Module):
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0, std=0.02)
+            std = 0.02
+            if hasattr(module, 'NANOGPT_SCALE_INIT'):
+                std *= (2 * self.config.n_layer) ** -0.5
+            torch.nn.init.normal_(module.weight, mean=0, std=std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
@@ -219,17 +224,24 @@ elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
     device = 'mps'
 print(f"Using device: {device}")
 
-# Get a data batch
-import tiktoken
-enc = tiktoken.get_encoding('gpt2')
-with open('input.txt', 'r') as f:
-    text = f.read()
-data = text[:1000]
-tokens = enc.encode(data)
-B, T = 4, 32
-buf = torch.tensor(tokens[:B * T + 1], device=device)
-x = buf[:-1].view(B, T)
-y = buf[1:].view(B, T)
+torch.manual_seed(1337)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(1337)
+elif torch.backends.mps.is_available():
+    torch.mps.manual_seed(1337)
+
+# Data batch practice
+# # Get a data batch
+# import tiktoken
+# enc = tiktoken.get_encoding('gpt2')
+# with open('input.txt', 'r') as f:
+#     text = f.read()
+# data = text[:1000]
+# tokens = enc.encode(data)
+# B, T = 4, 32
+# buf = torch.tensor(tokens[:B * T + 1], device=device)
+# x = buf[:-1].view(B, T)
+# y = buf[1:].view(B, T)
 
 # Different model inits
 # from transformers import GPT2LMHeadModel
