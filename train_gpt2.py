@@ -133,6 +133,18 @@ class GPT(nn.Module):
         # Tying weights of LM Head and WTE, weight sharing
         self.transformer.wte.weight = self.lm_head.weight
 
+        # Init the weights
+        self.apply(self._init_weights)
+
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0, std=0.02)
+
     
     def forward(self, idx, targets=None):
         # idx shape (B, T)
@@ -233,7 +245,7 @@ model.to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 data_loader = DataLoader(B=4, T=32)
 
-for i in range(2640):
+for i in range(50):
     x, y = data_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
