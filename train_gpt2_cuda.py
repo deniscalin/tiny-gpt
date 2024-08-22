@@ -68,11 +68,11 @@ class CausalSelfAttention(nn.Module):
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
         # Replace attention with FlashAttention
-        # y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        att = (q @ k.transpose(-1, -2)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        y = att @ v # (B, nh, T, T) @ (B, nh, T, hs) -> (B, nh, T, hs)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        # att = (q @ k.transpose(-1, -2)) * (1.0 / math.sqrt(k.size(-1)))
+        # att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+        # att = F.softmax(att, dim=-1)
+        # y = att @ v # (B, nh, T, T) @ (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.c_proj(y)
         return y
@@ -279,19 +279,19 @@ elif torch.backends.mps.is_available():
 # model = GPT2LMHeadModel.from_pretrained('gpt2')
 # model = GPT.from_pretrained('gpt2')
 
-torch.set_float32_matmul_precision('highest')
+torch.set_float32_matmul_precision('high')
 
 # Init a fresh model
 model = GPT(GPTConfig(vocab_size=50304))
 # model = GPT(GPTConfig())
 model.eval()
 model.to(device)
-# model = torch.compile(model)
+model = torch.compile(model)
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
 warmup_steps = 10
-max_steps = 164
+max_steps = 50
 
 
 def get_lr(it):
@@ -308,15 +308,15 @@ def get_lr(it):
 # Optimizer and data loader
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
-data_loader = DataLoader(B=4, T=1024)
+data_loader = DataLoader(B=16, T=1024)
 
 for step in range(max_steps):
     t0 = time.time()
     x, y = data_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    # with torch.autocast(device_type=device, dtype=torch.float16):
-    logits, loss = model(x, y)
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        logits, loss = model(x, y)
     # import code; code.interact(local=locals())
     loss.backward()
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
