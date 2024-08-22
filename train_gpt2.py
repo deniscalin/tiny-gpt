@@ -261,6 +261,14 @@ if torch.cuda.is_available():
 elif torch.backends.mps.is_available():
     torch.mps.manual_seed(1337)
 
+total_batch_size = 524288
+B = 4 # micro batch size
+T = 1024 # sequence lenght, block size
+assert total_batch_size % (B * T) == 0, 'make sure total_batch_size is divisible by B * T'
+grad_accum_steps = total_batch_size // (B * T)
+print("Total desired batch size: ", total_batch_size)
+print("Calculated gradient accum steps: ", grad_accum_steps)
+
 # Data batch practice
 # # Get a data batch
 # import tiktoken
@@ -291,7 +299,7 @@ model.to(device)
 max_lr = 6e-4
 min_lr = max_lr * 0.1
 warmup_steps = 10
-max_steps = 164
+max_steps = 50
 
 
 def get_lr(it):
@@ -312,13 +320,17 @@ data_loader = DataLoader(B=4, T=1024)
 
 for step in range(max_steps):
     t0 = time.time()
-    x, y = data_loader.next_batch()
-    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    # with torch.autocast(device_type=device, dtype=torch.float16):
-    logits, loss = model(x, y)
-    # import code; code.interact(local=locals())
-    loss.backward()
+    loss_accum = 0.0
+    for micro_step in range(grad_accum_steps):
+        x, y = data_loader.next_batch()
+        x, y = x.to(device), y.to(device)
+        # with torch.autocast(device_type=device, dtype=torch.float16):
+        logits, loss = model(x, y)
+        loss = loss / grad_accum_steps # Scale the loss by the number of accum steps to recover the additional normalization
+        # import code; code.interact(local=locals())
+        loss_accum += loss.detach()
+        loss.backward()
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     lr = get_lr(step)
     for param_group in optimizer.param_groups:
@@ -326,9 +338,10 @@ for step in range(max_steps):
     optimizer.step()
     torch.mps.synchronize()
     t1 = time.time()
-    dt = (t1 - t0) * 1000 # Time delta in miliseconds
-    tokens_throughput = (data_loader.B * data_loader.T) / (t1 - t0)
-    print(f"For step {step:4d}: loss: {loss.item():.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt:.2f}ms | tokens/sec: {tokens_throughput}")
+    dt = (t1 - t0) # Time delta in seconds
+    tokens_processed = data_loader.B * data_loader.T * grad_accum_steps
+    tokens_throughput = tokens_processed / dt 
+    print(f"For step {step:4d}: loss: {loss_accum.item():.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt:.2f}s | tokens/sec: {tokens_throughput}")
 
 
 # Inspecting the accuracy
