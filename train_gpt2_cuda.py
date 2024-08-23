@@ -336,7 +336,7 @@ for step in range(max_steps):
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
     optimizer.step()
-    torch.mps.synchronize()
+    torch.cuda.synchronize()
     t1 = time.time()
     dt = (t1 - t0) # Time delta in seconds
     tokens_processed = data_loader.B * data_loader.T * grad_accum_steps
