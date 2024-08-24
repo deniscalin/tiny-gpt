@@ -284,6 +284,7 @@ else:
         device = 'cuda'
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         device = 'mps'
+        autocast_device = 'cpu' # Per https://github.com/karpathy/build-nanogpt errata
     print(f"Using device: {device}")
 
 torch.manual_seed(1337)
