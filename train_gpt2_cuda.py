@@ -25,7 +25,7 @@ class DataLoader:
         tokens = enc.encode(text)
         self.tokens = torch.tensor(tokens)
         print(f"Loaded {len(tokens)} tokens")
-        print(f"1 epoch = {len(tokens) // (self.B * self.T * self.total_processes)} batches")
+        # print(f"1 epoch = {len(tokens) // (self.B * self.T * self.total_processes)} batches")
 
         # Keeping state
         self.current_position = self.B * self.T * self.process_rank
@@ -57,8 +57,9 @@ class CausalSelfAttention(nn.Module):
         self.c_proj.NANOGPT_SCALE_INIT = 1 # A flag to scale the residual layer init to 1/sqrt(n)
         self.n_embed = config.n_embed
         self.n_head = config.n_head
-        self.register_buffer('bias', torch.tril(torch.ones(config.block_size, config.block_size))
-                             .view(1, 1, config.block_size, config.block_size))
+        # No longer need the regiester_buffer for the attention mask since we switched to FlashAttention
+        # self.register_buffer('bias', torch.tril(torch.ones(config.block_size, config.block_size))
+        #                     .view(1, 1, config.block_size, config.block_size))
         
 
     def forward(self, x):
@@ -269,6 +270,7 @@ if ddp:
     ddp_local_rank = int(os.environ['LOCAL_RANK'])
     ddp_world_size = int(os.environ['WORLD_SIZE'])
     device = f'cuda:{ddp_local_rank}'
+    autocast_device = 'cuda'
     torch.cuda.set_device(device)
     master_process = ddp_rank == 0 # The master process does logging, checkpointing, etc
 else:
@@ -354,6 +356,9 @@ def get_lr(it):
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
 
+if master_process:
+    print(f"Using device: {device}")
+
 for step in range(max_steps):
     t0 = time.time()
     optimizer.zero_grad()
@@ -361,13 +366,13 @@ for step in range(max_steps):
     for micro_step in range(grad_accum_steps):
         x, y = data_loader.next_batch()
         x, y = x.to(device), y.to(device)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        if ddp:
+            model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
+        with torch.autocast(device_type=autocast_device, dtype=torch.bfloat16):
             logits, loss = model(x, y)
         # import code; code.interact(local=locals())
         loss = loss / grad_accum_steps
         loss_accum += loss.detach()
-        if ddp:
-            model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
         loss.backward()
     if ddp:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
@@ -383,7 +388,6 @@ for step in range(max_steps):
     tokens_throughput = tokens_processed / dt
     if master_process:
         print(f"For step {step:4d}: loss: {loss_accum.item():.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt:.2f}s | tokens/sec: {tokens_throughput}")
-
 
 if ddp:
     destroy_process_group()
