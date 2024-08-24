@@ -389,7 +389,7 @@ for step in range(max_steps):
     tokens_processed = data_loader.B * data_loader.T * grad_accum_steps * ddp_world_size
     tokens_throughput = tokens_processed / dt
     if master_process:
-        print(f"For step {step:4d}: loss: {loss_accum.item():.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt:.2f}s | tokens/sec: {tokens_throughput}")
+        print(f"For step {step:4d}: loss: {loss_accum.item():.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tokens/sec: {tokens_throughput}")
 
 if ddp:
     destroy_process_group()
