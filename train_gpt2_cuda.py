@@ -246,14 +246,39 @@ class GPT(nn.Module):
         return model
 
 #--------------------------------------------------------------
-import time
+# TO LAUNCH:
+# Simple run: python train_gpt2_cuda.py
+# DDP Run: torchrun --standalone --nproc_per_node=8 train_gpt2_cuda.py
 
-device = 'cpu'
-if torch.cuda.is_available():
-    device = 'cuda'
-elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-    device = 'mps'
-print(f"Using device: {device}")
+import os
+import time
+from torch.distributed import init_process_group, destroy_process_group
+
+# Set up DDP
+# The torchrun command will get env variables like RANK, LOCAL_RANK and WORLD_SIZE
+ddp = int(os.environ.get('RANK', -1)) != -1 #  checking if RANK is set, and therefore this is a ddp run
+
+if ddp:
+    assert torch.cuda.is_available()
+    init_process_group(backend='nccl')
+    ddp_rank = int(os.environ('RANK'))
+    ddp_local_rank = int(os.environ('LOCAL_RANK'))
+    ddp_world_size = int(os.environ('WORLD_SIZE'))
+    device = f'cuda:{ddp_local_rank}'
+    torch.cuda.set_device(device)
+    master_process = ddp_rank == 0 # The master process does logging, checkpointing, etc
+else:
+    # Non-ddp run
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+    device = 'cpu'
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = 'mps'
+    print(f"Using device: {device}")
 
 torch.manual_seed(1337)
 if torch.cuda.is_available():
@@ -261,14 +286,18 @@ if torch.cuda.is_available():
 elif torch.backends.mps.is_available():
     torch.mps.manual_seed(1337)
 
-total_batch_size = 524288
+total_batch_size = 524288 # total batch size to process for each update step (~0.5M per GPT3 paper)
 B = 16
 T = 1024
-assert total_batch_size % (B * T) == 0, 'make sure total_batch_size is divisible by B * T'
-grad_accum_steps = total_batch_size // (B * T)
-print("Total desired batch size: ", total_batch_size)
-print("Calculated gradient accum steps: ", grad_accum_steps)
+assert total_batch_size % (B * T * ddp_world_size) == 0, 'make sure total_batch_size is divisible by B * T * ddp_world_size'
+grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
+if master_process:
+    print("Total desired batch size: ", total_batch_size)
+    print("Calculated gradient accum steps: ", grad_accum_steps)
 
+print(f"I am GPU: {ddp_rank}")
+print(f"Yay, we got here!")
+import sys; sys.exit(0)
 # Data batch practice
 # # Get a data batch
 # import tiktoken
