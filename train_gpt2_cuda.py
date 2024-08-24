@@ -261,9 +261,9 @@ ddp = int(os.environ.get('RANK', -1)) != -1 #  checking if RANK is set, and ther
 if ddp:
     assert torch.cuda.is_available()
     init_process_group(backend='nccl')
-    ddp_rank = int(os.environ('RANK'))
-    ddp_local_rank = int(os.environ('LOCAL_RANK'))
-    ddp_world_size = int(os.environ('WORLD_SIZE'))
+    ddp_rank = int(os.environ['RANK'])
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])
+    ddp_world_size = int(os.environ['WORLD_SIZE'])
     device = f'cuda:{ddp_local_rank}'
     torch.cuda.set_device(device)
     master_process = ddp_rank == 0 # The master process does logging, checkpointing, etc
@@ -316,6 +316,8 @@ import sys; sys.exit(0)
 # model = GPT2LMHeadModel.from_pretrained('gpt2')
 # model = GPT.from_pretrained('gpt2')
 
+data_loader = DataLoader(B=16, T=1024)
+
 torch.set_float32_matmul_precision('high')
 
 # Init a fresh model
@@ -345,7 +347,6 @@ def get_lr(it):
 # Optimizer and data loader
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
-data_loader = DataLoader(B=16, T=1024)
 
 for step in range(max_steps):
     t0 = time.time()
