@@ -1,0 +1,3 @@
+transformers
+tiktoken
+networkx==3.3
