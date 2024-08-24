@@ -320,6 +320,7 @@ if master_process:
 # model = GPT2LMHeadModel.from_pretrained('gpt2')
 # model = GPT.from_pretrained('gpt2')
 
+# Data loader
 data_loader = DataLoader(B=16, T=1024, process_rank=ddp_rank, total_processes=ddp_world_size)
 
 torch.set_float32_matmul_precision('high')
@@ -353,7 +354,7 @@ def get_lr(it):
     return min_lr + coeff * (max_lr - min_lr)
 
 
-# Optimizer and data loader
+# Optimizer
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
 
@@ -367,13 +368,13 @@ for step in range(max_steps):
     for micro_step in range(grad_accum_steps):
         x, y = data_loader.next_batch()
         x, y = x.to(device), y.to(device)
-        if ddp:
-            model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
         with torch.autocast(device_type=autocast_device, dtype=torch.bfloat16):
             logits, loss = model(x, y)
         # import code; code.interact(local=locals())
         loss = loss / grad_accum_steps
         loss_accum += loss.detach()
+        if ddp:
+            model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
         loss.backward()
     if ddp:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
