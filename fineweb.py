@@ -2,7 +2,7 @@ import os
 import numpy as np
 import multiprocessing as mp
 import tiktoken
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from tqdm import tqdm
 
 local_dir = "edu_fineweb10B"
@@ -10,9 +10,16 @@ remote_name = "sample-10BT"
 shard_size = int(1e8) # 100M tokens per shard, 100 shards total
 
 DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir)
+DATASET_FILE_PATH = 'fineweb-edu-dataset'
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 
-fw = load_dataset("HuggingFaceFW/fineweb-edu", name=remote_name, split='train')
+if os.path.exists(DATASET_FILE_PATH):
+    fw = load_from_disk(DATASET_FILE_PATH)
+else:
+    fw = load_dataset("HuggingFaceFW/fineweb-edu", name=remote_name, split='train')
+    fw.save_to_disk('fineweb-edu-dataset')
+
+import sys; sys.exit(0)
 
 # Initialize the tokenizer and get the end of text token
 enc = tiktoken.get_encoding('gpt2')
@@ -64,5 +71,5 @@ with mp.Pool(nprocs) as pool:
     # Writing any remaining tokens into the last shard
     if token_count != 0:
         split = 'val' if shard_index == 0 else 'train'
-        filename = os.path.join(DATA_CACHE_DIR, f'fineweb-edu_{split}_{shard_index:.06d}')
+        filename = os.path.join(DATA_CACHE_DIR, f'edu-fineweb_{split}_{shard_index:.06d}')
         write_file(filename, all_tokens_np[:token_count])
