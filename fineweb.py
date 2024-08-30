@@ -67,5 +67,5 @@ if __name__ == '__main__':
         # Writing any remaining tokens into the last shard
         if token_count != 0:
             split = 'val' if shard_index == 0 else 'train'
-            filename = os.path.join(DATA_CACHE_DIR, f'edu-fineweb_{split}_{shard_index:.06d}')
+            filename = os.path.join(DATA_CACHE_DIR, f'fineweb-edu_{split}_{shard_index:06d}')
             write_file(filename, all_tokens_np[:token_count])
