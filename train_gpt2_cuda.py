@@ -33,9 +33,13 @@ class DataLoader:
         shards = sorted(shards)
         shards = [os.path.join(data_root, s) for s in shards]
         self.shards = shards
+        assert len(shards) > 0, f'Found no shards for split: {split}'
+        if master_process:
+            print(f"Found {len(shards)} shards for split: {split}")
 
         # Keeping state
         self.current_shard = 0
+        self.tokens = load_tokens(self.shards[self.current_shard])
         self.current_position = self.B * self.T * self.process_rank
 
 
@@ -47,6 +51,8 @@ class DataLoader:
         self.current_position += B * T * self.total_processes
         # If current_position would be out of bounds on next call, reset to 0
         if self.current_position + (B * T * self.total_processes + 1) > len(self.tokens):
+            self.current_shard = (self.current_shard + 1) % len(self.shards)
+            self.tokens = load_tokens(self.shards[self.current_shard])
             self.current_position = self.B * self.T * self.process_rank
         return x, y
 #--------------------------------------------------------
@@ -205,6 +211,7 @@ class GPT(nn.Module):
         logits = self.lm_head(x) # shape (B, T, vocab_size)
         loss = None
         if targets is not None:
+            # Try using the Liger Kernel: FusedCrossEntropy
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss
 
@@ -329,7 +336,7 @@ if master_process:
 # model = GPT.from_pretrained('gpt2')
 
 # Data loader
-data_loader = DataLoader(B=16, T=1024, process_rank=ddp_rank, total_processes=ddp_world_size)
+train_loader = DataLoader(B=B, T=T, process_rank=ddp_rank, total_processes=ddp_world_size, split='train')
 
 torch.set_float32_matmul_precision('high')
 
@@ -344,9 +351,9 @@ raw_model = model.module if ddp else model
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
-warmup_steps = 10
-max_steps = 50
-
+# Try 27 (375e6 / 26 / 2**19)
+warmup_steps = 715
+max_steps = 19073
 
 def get_lr(it):
     # Linear lr warmup to quickly ramp up to max_lr
