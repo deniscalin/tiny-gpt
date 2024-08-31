@@ -307,11 +307,16 @@ else:
         autocast_device = 'cpu' # Per https://github.com/karpathy/build-nanogpt errata
     print(f"Using device: {device}")
 
-torch.manual_seed(1337)
+
+# Set global and generation seeds for RNGs
+global_seed = 1337
+gen_seed = 42
+
+torch.manual_seed(global_seed)
 if torch.cuda.is_available():
-    torch.cuda.manual_seed(1337)
+    torch.cuda.manual_seed(global_seed)
 elif torch.backends.mps.is_available():
-    torch.mps.manual_seed(1337)
+    torch.mps.manual_seed(global_seed)
 
 ### SETTING BATCH SIZE
 total_batch_size = 524288 # total batch size to process for each update step (~0.5M per GPT3 paper)
@@ -383,6 +388,14 @@ def get_lr(it):
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
 
+
+# Create a dir for logging and saving checkpoints
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f'log.txt')
+with open(log_file, 'w') as f: # open the file in w mode to clear it
+    pass
+
 # Get tiktoken encoder for generation
 enc = tiktoken.get_encoding('gpt2')
 
@@ -391,15 +404,16 @@ if master_process:
 
 for step in range(max_steps):
     t0 = time.time()
+    last_step = (step == max_steps - 1)
 
     # Evaluate the validation loss every 100 steps
-    if step % 100 == 0:
+    if step % 250 == 0 or last_step:
         model.eval()
         val_loader.reset()
         with torch.no_grad():
             val_loss_accum = 0.0
             val_eval_steps = 20
-            for eval_step in range(val_eval_steps):
+            for _ in range(val_eval_steps):
                 x, y = val_loader.next_batch()
                 x, y = x.to(device), y.to(device)
                 with torch.autocast(device_type=autocast_device, dtype=torch.bfloat16):
@@ -409,10 +423,24 @@ for step in range(max_steps):
         if ddp:
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         if master_process:
-            print(f"Validation loss: {val_loss_accum:.4f}")
+            print(f"Validation loss: {val_loss_accum.item():.4f}")
+            with open(log_file, 'a') as f:
+                f.write(f"{step} val {val_loss_accum.item():.4f}\n")
+            if (step > 0) and (step % 5000 == 0 or last_step):
+                checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
+                checkpoint = {
+                    "model": raw_model.state_dict(),
+                    "config": raw_model.config,
+                    "step": step,
+                    "val_loss": val_loss_accum.item(),
+                    "optimizer": optimizer.state_dict(),
+                    "global_seed": global_seed,
+                    "gen_seed": gen_seed
+                }
+                torch.save(checkpoint, checkpoint_path)
 
-    # Every 100th step, except for step 0, also generate from the model (if torch.compile is not being used -- bug)
-    if step > 0 and step % 100 == 0:
+    # Every 250th step, except for step 0, also generate from the model (if torch.compile is not being used -- bug)
+    if ((step > 0 and step % 250 == 0) or last_step) and (not use_compile):
         model.eval()
         num_return_sequences = 4
         max_length = 32
@@ -421,7 +449,7 @@ for step in range(max_steps):
         tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
         x_gen = tokens.to(device=device)
         seed_gen = torch.Generator(device=device)
-        seed_gen.manual_seed(42 + ddp_rank)
+        seed_gen.manual_seed(gen_seed + ddp_rank)
         while x_gen.size(1) < max_length:
             with torch.no_grad():
                 logits, loss = model(x_gen)
@@ -465,6 +493,8 @@ for step in range(max_steps):
     tokens_throughput = tokens_processed / dt
     if master_process:
         print(f"For step {step:4d}: loss: {loss_accum.item():.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tokens/sec: {tokens_throughput}")
+        with open(log_file, 'a') as f:
+            f.write(f"{step} train {loss_accum.item():.6f}\n")
 
 if ddp:
     destroy_process_group()
