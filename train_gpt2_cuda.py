@@ -391,11 +391,10 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 raw_model = model.module if ddp else model
 
-max_lr = 6e-4
+max_lr = 6e-4 # try 3x -> 1.8e-3
 min_lr = max_lr * 0.1
-# Try 27 (375e6 / 26 / 2**19)
-warmup_steps = 715
-max_steps = 19073
+warmup_steps = 715 # Try 27 (375e6 / 26 / 2**19)
+max_steps = 19073 # try 4x -> 76,292
 
 def get_lr(it):
     # Linear lr warmup to quickly ramp up to max_lr
