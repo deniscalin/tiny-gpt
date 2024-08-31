@@ -347,7 +347,7 @@ elif torch.backends.mps.is_available():
 
 ### SETTING BATCH SIZE
 total_batch_size = 524288 # total batch size to process for each update step (~0.5M per GPT3 paper)
-B = 16
+B = 64
 T = 1024
 assert total_batch_size % (B * T * ddp_world_size) == 0, 'make sure total_batch_size is divisible by B * T * ddp_world_size'
 grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
