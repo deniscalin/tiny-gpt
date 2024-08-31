@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import inspect
+# For use on Linux, check if this might work TODO: check how to modify the model to use this
+# from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss 
 
 #--------------------------------------------------------
 import tiktoken
@@ -311,6 +313,7 @@ if torch.cuda.is_available():
 elif torch.backends.mps.is_available():
     torch.mps.manual_seed(1337)
 
+### SETTING BATCH SIZE
 total_batch_size = 524288 # total batch size to process for each update step (~0.5M per GPT3 paper)
 B = 16
 T = 1024
@@ -346,9 +349,12 @@ torch.set_float32_matmul_precision('high')
 
 # Init a fresh model
 model = GPT(GPTConfig(vocab_size=50304))
-# model.eval()
+# Or evaluate a pre-trained model
+# model = GPT(GPTConfig(vocab_size=50304)).from_pretrained('gpt2')
 model.to(device)
-model = torch.compile(model)
+use_compile = False
+if use_compile:
+    model = torch.compile(model)
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 raw_model = model.module if ddp else model
@@ -377,6 +383,9 @@ def get_lr(it):
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
 
+# Get tiktoken encoder for generation
+enc = tiktoken.get_encoding('gpt2')
+
 if master_process:
     print(f"Using device: {device}")
 
@@ -401,6 +410,31 @@ for step in range(max_steps):
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         if master_process:
             print(f"Validation loss: {val_loss_accum:.4f}")
+
+    # Every 100th step, except for step 0, also generate from the model (if torch.compile is not being used -- bug)
+    if step > 0 and step % 100 == 0:
+        model.eval()
+        num_return_sequences = 4
+        max_length = 32
+        tokens = enc.encode("Hello, I'm a language model,")
+        tokens = torch.tensor(tokens, dtype=torch.long)
+        tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+        x_gen = tokens.to(device=device)
+        seed_gen = torch.Generator(device=device)
+        seed_gen.manual_seed(42 + ddp_rank)
+        while x_gen.size(1) < max_length:
+            with torch.no_grad():
+                logits, loss = model(x_gen)
+                logits = logits[:, -1, :]
+                probs = F.softmax(logits, -1) # (B, 1, vocab_size)
+                topk_probs, topk_indices = torch.topk(probs, 50, -1) # Returns the 50 highest probabilities and their indices from probs for each B -> (4, 50)
+                ix = torch.multinomial(topk_probs, 1, generator=seed_gen) # Samples 1 prob from the topk_probs distribution and returns its index -> (B, 1)
+                x_gen_col = torch.gather(topk_indices, -1, ix) # (B, 1)
+                x_gen = torch.cat((x_gen, x_gen_col), 1) # (B, T+1)
+        for i in range(num_return_sequences):
+            tokens = x_gen[i, :max_length].tolist()
+            decoded = enc.decode(tokens)
+            print(f"Rank {ddp_rank} sample {i}: {decoded}")
 
     # The training loop
     model.train()

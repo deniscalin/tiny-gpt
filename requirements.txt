@@ -2,3 +2,5 @@ transformers
 tiktoken
 networkx==3.3
 torch==2.4
+# liger-kernel
+# triton
