@@ -381,7 +381,7 @@ for step in range(max_steps):
     optimizer.zero_grad()
     loss_accum = 0.0
     for micro_step in range(grad_accum_steps):
-        x, y = data_loader.next_batch()
+        x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
         with torch.autocast(device_type=autocast_device, dtype=torch.bfloat16):
             logits, loss = model(x, y)
@@ -401,7 +401,7 @@ for step in range(max_steps):
     torch.cuda.synchronize()
     t1 = time.time()
     dt = (t1 - t0) # Time delta in seconds
-    tokens_processed = data_loader.B * data_loader.T * grad_accum_steps * ddp_world_size
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
     tokens_throughput = tokens_processed / dt
     if master_process:
         print(f"For step {step:4d}: loss: {loss_accum.item():.6f} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tokens/sec: {tokens_throughput}")
