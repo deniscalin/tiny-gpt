@@ -36,7 +36,10 @@ class DataLoader:
         assert len(shards) > 0, f'Found no shards for split: {split}'
         if master_process:
             print(f"Found {len(shards)} shards for split: {split}")
+        self.reset()
 
+    
+    def reset(self):
         # Keeping state
         self.current_shard = 0
         self.tokens = load_tokens(self.shards[self.current_shard])
@@ -337,6 +340,7 @@ if master_process:
 
 # Data loader
 train_loader = DataLoader(B=B, T=T, process_rank=ddp_rank, total_processes=ddp_world_size, split='train')
+val_loader = DataLoader(B=B, T=T, process_rank=ddp_rank, total_processes=ddp_world_size, split='val')
 
 torch.set_float32_matmul_precision('high')
 
@@ -378,6 +382,28 @@ if master_process:
 
 for step in range(max_steps):
     t0 = time.time()
+
+    # Evaluate the validation loss every 100 steps
+    if step % 100 == 0:
+        model.eval()
+        val_loader.reset()
+        with torch.no_grad():
+            val_loss_accum = 0.0
+            val_eval_steps = 20
+            for eval_step in range(val_eval_steps):
+                x, y = val_loader.next_batch()
+                x, y = x.to(device), y.to(device)
+                with torch.autocast(device_type=autocast_device, dtype=torch.bfloat16):
+                    logits, loss = model(x, y)
+                loss = loss / val_eval_steps
+                val_loss_accum += loss.detach()
+        if ddp:
+            dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
+        if master_process:
+            print(f"Validation loss: {val_loss_accum:.4f}")
+
+    # The training loop
+    model.train()
     optimizer.zero_grad()
     loss_accum = 0.0
     for micro_step in range(grad_accum_steps):
