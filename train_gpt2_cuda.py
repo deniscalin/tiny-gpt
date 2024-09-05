@@ -393,7 +393,7 @@ raw_model = model.module if ddp else model
 
 max_lr = 6e-4 # try 3x -> 1.8e-3
 min_lr = max_lr * 0.1
-warmup_steps = 715 # Try 27 (375e6 / 26 / 2**19)
+warmup_steps = 715 # Try 27 (375e6 / 26 / 2**19) or 100
 max_steps = 19073 # try 4x -> 76,292
 
 def get_lr(it):
@@ -459,6 +459,7 @@ for step in range(max_steps):
                     "config": raw_model.config,
                     "step": step,
                     "val_loss": val_loss_accum.item(),
+                    'train_loss': loss_accum.item(),
                     "optimizer": optimizer.state_dict(),
                     "global_seed": global_seed,
                     "gen_seed": gen_seed
