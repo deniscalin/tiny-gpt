@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import math
+import json
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -10,12 +11,6 @@ from hellaswag import render_example, iterate_examples
 #--------------------------------------------------------
 import tiktoken
 import numpy as np
-
-import os
-import time
-from torch.distributed import init_process_group, destroy_process_group
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed as dist
 
 
 def load_tokens(filename):
@@ -275,6 +270,42 @@ class GPT(nn.Module):
         return model
     
 
+# -----------------------------------------------------------------------------
+# COPIED
+# helper function for HellaSwag eval
+# takes tokens, mask, and logits, returns the index of the completion with the lowest loss
+
+def get_most_likely_row(tokens, mask, logits):
+    # evaluate the autoregressive loss at all positions
+    shift_logits = (logits[..., :-1, :]).contiguous()
+    shift_tokens = (tokens[..., 1:]).contiguous()
+    flat_shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+    flat_shift_tokens = shift_tokens.view(-1)
+    shift_losses = F.cross_entropy(flat_shift_logits, flat_shift_tokens, reduction='none')
+    shift_losses = shift_losses.view(tokens.size(0), -1)
+    # now get the average loss just for the completion region (where mask == 1), in each row
+    shift_mask = (mask[..., 1:]).contiguous() # we must shift mask, so we start at the last prompt token
+    masked_shift_losses = shift_losses * shift_mask
+    # sum and divide by the number of 1s in the mask
+    sum_loss = masked_shift_losses.sum(dim=1)
+    avg_loss = sum_loss / shift_mask.sum(dim=1)
+    # now we have a loss for each of the 4 completions
+    # the one with the lowest loss should be the most likely
+    pred_norm = avg_loss.argmin().item()
+    return pred_norm
+
+# COPIED
+#---------------------------------------------------------------------------
+# TO LAUNCH:
+# Simple run: python train_gpt2_cuda.py
+# DDP Run: torchrun --standalone --nproc_per_node=8 train_gpt2_cuda.py
+
+import os
+import time
+from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
+
 # Set up DDP
 # The torchrun command will get env variables like RANK, LOCAL_RANK and WORLD_SIZE
 ddp = int(os.environ.get('RANK', -1)) != -1 #  checking if RANK is set, and therefore this is a ddp run
@@ -304,58 +335,31 @@ else:
         autocast_device = 'cpu' # Per https://github.com/karpathy/build-nanogpt errata
     print(f"Using device: {device}")
 
-# Set global and generation seeds for RNGs
-global_seed = 1337
-gen_seed = 42
 
-torch.manual_seed(global_seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(global_seed)
-elif torch.backends.mps.is_available():
-    torch.mps.manual_seed(global_seed)
-
-# Instantiate the model, move to device and explore the checkpoint
-model = GPT(GPTConfig(vocab_size=50304))
-model.to(device)
-sd = torch.load('log/model_19072.pt', map_location=torch.device('mps'))
-print("Loaded model sd")
-print("Config: ", sd['config'])
-print("Step: ", sd['step'])
-print("Val loss: ", sd['val_loss'])
-print("Loaded optimizer sd")
-print("Global seed: ", sd['global_seed'])
-print("Gen seed: ", sd['gen_seed'])
-
-# Load the model state dict checkpoint
-model.load_state_dict(sd['model'], strict=True)
-model.eval()
-
-# Create the encoder
-enc = tiktoken.get_encoding('gpt2')
-
-# Generate
-num_return_sequences = 6
-max_length = 100
-tokens = enc.encode("We wrote a poem about a woman and a planet in our solar system:")
-tokens = torch.tensor(tokens, dtype=torch.long)
-tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x_gen = tokens.to(device=device)
-seed_gen = torch.Generator(device=device)
-seed_gen.manual_seed(gen_seed + ddp_rank)
-while x_gen.size(1) < max_length:
-    with torch.no_grad():
-        logits, loss = model(x_gen)
-        logits = logits[:, -1, :]
-        probs = F.softmax(logits, -1) # (B, 1, vocab_size)
-        topk_probs, topk_indices = torch.topk(probs, 50, -1) # Returns the 50 highest probabilities and their indices from probs for each B -> (4, 50)
-        ix = torch.multinomial(topk_probs, 1, generator=seed_gen) # Samples 1 prob from the topk_probs distribution and returns its index -> (B, 1)
-        x_gen_col = torch.gather(topk_indices, -1, ix) # (B, 1)
-        x_gen = torch.cat((x_gen, x_gen_col), 1) # (B, T+1)
-for i in range(num_return_sequences):
-    tokens = x_gen[i, :max_length].tolist()
-    decoded = enc.decode(tokens)
-    print(f"Rank {ddp_rank} sample {i}: {decoded}")
+###############################
+# Exploring the dataset
+with open('alpaca_gpt4_data.json', 'r') as f:
+    alpaca = json.loads(f.read())
 
 
-import sys; sys.exit(0)
+def prompt_no_input(row):
+    return ("Below is an instruction that describes a task. "
+           "Write a response that appropriately completes the request.\n\n"
+           "### Instruction:\n{instruction}\n\n### Response:\n").format_map(row)
 
+def prompt_input(row):
+    return ("Below is an instruction that describes a task, paired with an input that provides further context. "
+           "Write a response that appropriately completes the request.\n\n"
+           "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:\n").format_map(row)
+
+
+
+
+
+
+
+# print(len(alpaca))
+# print(alpaca[0])
+# print(alpaca[-1])
+
+# print("This is an {adj} string".format_map(dict(adj='awesome')))

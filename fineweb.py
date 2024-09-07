@@ -5,6 +5,8 @@ import tiktoken
 from datasets import load_dataset, load_from_disk
 from tqdm import tqdm
 
+# NOTE: think about permuting the data, namely the order of documents in the dataset. Perhaps each epoch can be permuted differently and shuffled randomly.
+
 local_dir = "edu_fineweb10B"
 remote_name = "sample-10BT"
 shard_size = int(1e8) # 100M tokens per shard, 100 shards total

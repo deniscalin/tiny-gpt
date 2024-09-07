@@ -432,7 +432,7 @@ for step in range(max_steps):
     t0 = time.time()
     last_step = (step == max_steps - 1)
 
-    # Evaluate the validation loss every 100 steps
+    # Evaluate the validation loss every 250 steps
     if step % 250 == 0 or last_step:
         model.eval()
         val_loader.reset()
