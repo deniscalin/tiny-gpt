@@ -334,32 +334,3 @@ else:
         device = 'mps'
         autocast_device = 'cpu' # Per https://github.com/karpathy/build-nanogpt errata
     print(f"Using device: {device}")
-
-
-###############################
-# Exploring the dataset
-with open('alpaca_gpt4_data.json', 'r') as f:
-    alpaca = json.loads(f.read())
-
-
-def prompt_no_input(row):
-    return ("Below is an instruction that describes a task. "
-           "Write a response that appropriately completes the request.\n\n"
-           "### Instruction:\n{instruction}\n\n### Response:\n").format_map(row)
-
-def prompt_input(row):
-    return ("Below is an instruction that describes a task, paired with an input that provides further context. "
-           "Write a response that appropriately completes the request.\n\n"
-           "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:\n").format_map(row)
-
-
-
-
-
-
-
-# print(len(alpaca))
-# print(alpaca[0])
-# print(alpaca[-1])
-
-# print("This is an {adj} string".format_map(dict(adj='awesome')))
