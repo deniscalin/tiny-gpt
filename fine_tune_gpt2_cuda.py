@@ -340,7 +340,35 @@ else:
         autocast_device = 'cpu' # Per https://github.com/karpathy/build-nanogpt errata
     print(f"Using device: {device}")
 
+# Set global and generation seeds for RNGs
+global_seed = 1337
+gen_seed = 42
 
+torch.manual_seed(global_seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(global_seed)
+elif torch.backends.mps.is_available():
+    torch.mps.manual_seed(global_seed)
+
+# Load the tokenized, numpy uint16 alpaca dataset (stored in a list of dicts)
 alpaca_set = load_file('alpaca_set.npy')
 print("First x", alpaca_set[0]['x'])
 print("First y", alpaca_set[0]['y'])
+
+# Instantiate the model, move to device and load the checkpoint
+model = GPT(GPTConfig(vocab_size=50304))
+model.to(device)
+sd = torch.load('log/model_19072.pt', map_location=torch.device('mps'))
+print("Loaded model sd")
+print("Config: ", sd['config'])
+print("Step: ", sd['step'])
+print("Val loss: ", sd['val_loss'])
+print("Loaded optimizer sd")
+print("Global seed: ", sd['global_seed'])
+print("Gen seed: ", sd['gen_seed'])
+
+# Load the model state dict checkpoint
+model.load_state_dict(sd['model'], strict=True)
+
+# Create the encoder
+enc = tiktoken.get_encoding('gpt2')
