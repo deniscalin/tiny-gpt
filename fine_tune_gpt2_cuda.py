@@ -14,10 +14,15 @@ import numpy as np
 
 
 def load_tokens(filename):
-    npt = np.load(filename)
+    npt = np.load(filename, allow_pickle=True)
     npt = npt.astype(np.int32)
     ptt = torch.tensor(npt, dtype=torch.long)
     return ptt
+
+
+def load_file(filename):
+    npt = np.load(filename, allow_pickle=True)
+    return npt
 
 
 class DataLoader:
@@ -334,3 +339,8 @@ else:
         device = 'mps'
         autocast_device = 'cpu' # Per https://github.com/karpathy/build-nanogpt errata
     print(f"Using device: {device}")
+
+
+alpaca_set = load_file('alpaca_set.npy')
+print("First x", alpaca_set[0]['x'])
+print("First y", alpaca_set[0]['y'])
