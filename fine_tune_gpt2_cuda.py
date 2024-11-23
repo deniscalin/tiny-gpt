@@ -25,6 +25,12 @@ def load_file(filename):
     return npt
 
 
+# class FineTuneDataLoader:
+
+#     def __init__(self):
+
+
+
 class DataLoader:
 
     def __init__(self, B, T, process_rank, total_processes, split):
@@ -66,6 +72,9 @@ class DataLoader:
             self.tokens = load_tokens(self.shards[self.current_shard])
             self.current_position = self.B * self.T * self.process_rank
         return x, y
+    
+
+
 #--------------------------------------------------------
 
 
@@ -276,7 +285,6 @@ class GPT(nn.Module):
     
 
 # -----------------------------------------------------------------------------
-# COPIED
 # helper function for HellaSwag eval
 # takes tokens, mask, and logits, returns the index of the completion with the lowest loss
 
@@ -299,7 +307,7 @@ def get_most_likely_row(tokens, mask, logits):
     pred_norm = avg_loss.argmin().item()
     return pred_norm
 
-# COPIED
+
 #---------------------------------------------------------------------------
 # TO LAUNCH:
 # Simple run: python train_gpt2_cuda.py

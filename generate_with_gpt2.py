@@ -275,87 +275,95 @@ class GPT(nn.Module):
         return model
     
 
-# Set up DDP
-# The torchrun command will get env variables like RANK, LOCAL_RANK and WORLD_SIZE
-ddp = int(os.environ.get('RANK', -1)) != -1 #  checking if RANK is set, and therefore this is a ddp run
 
-if ddp:
-    assert torch.cuda.is_available()
-    init_process_group(backend='nccl')
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
-    device = f'cuda:{ddp_local_rank}'
-    autocast_device = 'cuda'
-    torch.cuda.set_device(device)
-    master_process = ddp_rank == 0 # The master process does logging, checkpointing, etc
-else:
-    # Non-ddp run
-    ddp_rank = 0
-    ddp_local_rank = 0
-    ddp_world_size = 1
-    master_process = True
-    device = 'cpu'
-    if torch.cuda.is_available():
-        device = 'cuda'
+if __name__ == '__main__':
+    # Set up DDP
+    # The torchrun command will get env variables like RANK, LOCAL_RANK and WORLD_SIZE
+    ddp = int(os.environ.get('RANK', -1)) != -1 #  checking if RANK is set, and therefore this is a ddp run
+
+    if ddp:
+        assert torch.cuda.is_available()
+        init_process_group(backend='nccl')
+        ddp_rank = int(os.environ['RANK'])
+        ddp_local_rank = int(os.environ['LOCAL_RANK'])
+        ddp_world_size = int(os.environ['WORLD_SIZE'])
+        device = f'cuda:{ddp_local_rank}'
         autocast_device = 'cuda'
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device = 'mps'
-        autocast_device = 'cpu' # Per https://github.com/karpathy/build-nanogpt errata
-    print(f"Using device: {device}")
+        torch.cuda.set_device(device)
+        master_process = ddp_rank == 0 # The master process does logging, checkpointing, etc
+    else:
+        # Non-ddp run
+        ddp_rank = 0
+        ddp_local_rank = 0
+        ddp_world_size = 1
+        master_process = True
+        device = 'cpu'
+        if torch.cuda.is_available():
+            device = 'cuda'
+            autocast_device = 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = 'mps'
+            autocast_device = 'cpu' # Per https://github.com/karpathy/build-nanogpt errata
+        print(f"Using device: {device}")
 
-# Set global and generation seeds for RNGs
-global_seed = 1337
-gen_seed = 42
+    # Set global and generation seeds for RNGs
+    global_seed = 1337
+    gen_seed = 42
 
-torch.manual_seed(global_seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(global_seed)
-elif torch.backends.mps.is_available():
-    torch.mps.manual_seed(global_seed)
+    torch.manual_seed(global_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(global_seed)
+    elif torch.backends.mps.is_available():
+        torch.mps.manual_seed(global_seed)
 
-# Instantiate the model, move to device and explore the checkpoint
-model = GPT(GPTConfig(vocab_size=50304))
-model.to(device)
-sd = torch.load('log/model_19072.pt', map_location=torch.device('mps'))
-print("Loaded model sd")
-print("Config: ", sd['config'])
-print("Step: ", sd['step'])
-print("Val loss: ", sd['val_loss'])
-print("Loaded optimizer sd")
-print("Global seed: ", sd['global_seed'])
-print("Gen seed: ", sd['gen_seed'])
+    # Instantiate the model, move to device and explore the checkpoint
+    # Either use the GPT2LMHeadModel, or use our own
+    use_lm_head_model = False
+    if use_lm_head_model:
+        model = GPT(GPTConfig(vocab_size=50304)).from_pretrained('gpt2')
+        model.to(device)
+    else:
+        model = GPT(GPTConfig(vocab_size=50304))
+        model.to(device)
+        sd = torch.load('log/model_19072.pt', map_location=torch.device('mps'))
+        print("Loaded model sd")
+        print("Config: ", sd['config'])
+        print("Step: ", sd['step'])
+        print("Val loss: ", sd['val_loss'])
+        print("Loaded optimizer sd")
+        print("Global seed: ", sd['global_seed'])
+        print("Gen seed: ", sd['gen_seed'])
+        # Load the model state dict checkpoint
+        model.load_state_dict(sd['model'], strict=True)
 
-# Load the model state dict checkpoint
-model.load_state_dict(sd['model'], strict=True)
-model.eval()
+    model.eval()
 
-# Create the encoder
-enc = tiktoken.get_encoding('gpt2')
+    # Create the encoder
+    enc = tiktoken.get_encoding('gpt2')
 
-# Generate
-num_return_sequences = 6
-max_length = 100
-tokens = enc.encode("We wrote a poem about a woman and a planet in our solar system:")
-tokens = torch.tensor(tokens, dtype=torch.long)
-tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x_gen = tokens.to(device=device)
-seed_gen = torch.Generator(device=device)
-seed_gen.manual_seed(gen_seed + ddp_rank)
-while x_gen.size(1) < max_length:
-    with torch.no_grad():
-        logits, loss = model(x_gen)
-        logits = logits[:, -1, :]
-        probs = F.softmax(logits, -1) # (B, 1, vocab_size)
-        topk_probs, topk_indices = torch.topk(probs, 50, -1) # Returns the 50 highest probabilities and their indices from probs for each B -> (4, 50)
-        ix = torch.multinomial(topk_probs, 1, generator=seed_gen) # Samples 1 prob from the topk_probs distribution and returns its index -> (B, 1)
-        x_gen_col = torch.gather(topk_indices, -1, ix) # (B, 1)
-        x_gen = torch.cat((x_gen, x_gen_col), 1) # (B, T+1)
-for i in range(num_return_sequences):
-    tokens = x_gen[i, :max_length].tolist()
-    decoded = enc.decode(tokens)
-    print(f"Rank {ddp_rank} sample {i}: {decoded}")
+    # Generate
+    num_return_sequences = 6
+    max_length = 100
+    tokens = enc.encode("Question: How much is 13 + 1? Answer:")
+    tokens = torch.tensor(tokens, dtype=torch.long)
+    tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+    x_gen = tokens.to(device=device)
+    seed_gen = torch.Generator(device=device)
+    seed_gen.manual_seed(gen_seed + ddp_rank)
+    while x_gen.size(1) < max_length:
+        with torch.no_grad():
+            logits, loss = model(x_gen)
+            logits = logits[:, -1, :]
+            probs = F.softmax(logits, -1) # (B, 1, vocab_size)
+            topk_probs, topk_indices = torch.topk(probs, 50, -1) # Returns the 50 highest probabilities and their indices from probs for each B -> (4, 50)
+            ix = torch.multinomial(topk_probs, 1, generator=seed_gen) # Samples 1 prob from the topk_probs distribution and returns its index -> (B, 1)
+            x_gen_col = torch.gather(topk_indices, -1, ix) # (B, 1)
+            x_gen = torch.cat((x_gen, x_gen_col), 1) # (B, T+1)
+    for i in range(num_return_sequences):
+        tokens = x_gen[i, :max_length].tolist()
+        decoded = enc.decode(tokens)
+        print(f"Rank {ddp_rank} sample {i}: {decoded}")
 
 
-import sys; sys.exit(0)
+    import sys; sys.exit(0)
 
