@@ -8,9 +8,10 @@ import inspect
 # For use on Linux, check if this might work TODO: check how to modify the model to use this
 # from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss 
 from hellaswag import render_example, iterate_examples
-#--------------------------------------------------------
 import tiktoken
 import numpy as np
+
+# NOTE: this script is a WIP
 
 
 def load_tokens(filename):

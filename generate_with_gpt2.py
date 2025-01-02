@@ -344,7 +344,7 @@ if __name__ == '__main__':
     # Generate
     num_return_sequences = 6
     max_length = 100
-    tokens = enc.encode("Question: How much is 13 + 1? Answer:")
+    tokens = enc.encode("When Mary and John went to the store, John gave a drink to")
     tokens = torch.tensor(tokens, dtype=torch.long)
     tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
     x_gen = tokens.to(device=device)

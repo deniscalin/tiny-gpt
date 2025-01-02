@@ -293,7 +293,7 @@ def get_most_likely_row(tokens, mask, logits):
     pred_norm = avg_loss.argmin().item()
     return pred_norm
 
-# COPIED
+# END COPIED
 #---------------------------------------------------------------------------
 # TO LAUNCH:
 # Simple run: python train_gpt2_cuda.py
@@ -466,7 +466,7 @@ for step in range(max_steps):
                 }
                 torch.save(checkpoint, checkpoint_path)
 
-    # once in a while evaluate hellaswag - COPIED
+    # once in a while evaluate hellaswag
     if (step % 250 == 0 or last_step) and (not use_compile):
         num_correct_norm = 0
         num_total = 0
